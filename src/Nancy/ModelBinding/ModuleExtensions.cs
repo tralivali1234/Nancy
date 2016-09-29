@@ -7,9 +7,12 @@ namespace Nancy.ModelBinding
 
     using Nancy.Validation;
 
+    /// <summary>
+    /// A convenience class that contains various extension methods for modules.
+    /// </summary>
     public static class ModuleExtensions
     {
-        private static readonly string[] NoBlacklistedProperties = new string[0];
+        private static readonly string[] NoBlacklistedProperties = ArrayCache.Empty<string>();
 
         /// <summary>
         /// Parses an array of expressions like <code>t =&gt; t.Property</code> to a list of strings containing the property names;
@@ -236,7 +239,7 @@ namespace Nancy.ModelBinding
         /// <param name="blacklistedProperties">Property names to blacklist from binding</param>
         public static TModel BindTo<TModel>(this INancyModule module, TModel instance, params string[] blacklistedProperties)
         {
-            return module.BindTo(instance, BindingConfig.Default, blacklistedProperties);
+            return module.BindTo(instance, BindingConfig.NoOverwrite, blacklistedProperties);
         }
 
         /// <summary>
@@ -249,7 +252,7 @@ namespace Nancy.ModelBinding
         /// <example>this.Bind&lt;Person&gt;(p =&gt; p.Name, p =&gt; p.Age)</example>
         public static TModel BindTo<TModel>(this INancyModule module, TModel instance, params Expression<Func<TModel, object>>[] blacklistedProperties)
         {
-            return module.BindTo(instance, BindingConfig.Default, blacklistedProperties.ParseBlacklistedPropertiesExpressionTree());
+            return module.BindTo(instance, BindingConfig.NoOverwrite, blacklistedProperties.ParseBlacklistedPropertiesExpressionTree());
         }
 
         /// <summary>
@@ -260,7 +263,7 @@ namespace Nancy.ModelBinding
         /// <param name="instance">The class instance to bind properties to</param>
         public static TModel BindTo<TModel>(this INancyModule module, TModel instance)
         {
-            return module.BindTo(instance, BindingConfig.Default, NoBlacklistedProperties);
+            return module.BindTo(instance, BindingConfig.NoOverwrite, NoBlacklistedProperties);
         }
 
         /// <summary>

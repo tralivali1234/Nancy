@@ -6,8 +6,9 @@
     using System.IO;
     using System.Linq;
     using System.Net;
+    using System.Security.Cryptography.X509Certificates;
     using System.Security.Principal;
-
+    using System.Threading.Tasks;
     using Nancy.Bootstrapper;
     using Nancy.Extensions;
     using Nancy.Helpers;
@@ -32,6 +33,7 @@
         private readonly INancyEngine engine;
         private readonly HostConfiguration configuration;
         private readonly INancyBootstrapper bootstrapper;
+        private bool stop = false;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="NancyHost"/> class for the specified <paramref name="baseUris"/>.
@@ -122,16 +124,22 @@
         {
             this.StartListener();
 
-            try
+            Task.Factory.StartNew(async () =>
             {
-                this.listener.BeginGetContext(this.GotCallback, null);
-            }
-            catch (Exception e)
-            {
-                this.configuration.UnhandledExceptionCallback.Invoke(e);
-
-                throw;
-            }
+                try
+                {
+                    while(!this.stop)
+                    {
+                        HttpListenerContext context = await this.listener.GetContextAsync().ConfigureAwait(false);
+                        await this.Process(context).ConfigureAwait(false);
+                    }
+                }
+                catch(Exception ex)
+                {
+                    this.configuration.UnhandledExceptionCallback.Invoke(ex);
+                    throw;
+                }
+            });
         }
 
         private void StartListener()
@@ -151,7 +159,7 @@
                 throw new InvalidOperationException("Unable to configure namespace reservation");
             }
 
-            if (!TryStartListener())
+            if (!this.TryStartListener())
             {
                 throw new InvalidOperationException("Unable to start listener");
             }
@@ -201,12 +209,9 @@
 
         private string GetUser()
         {
-            if (!string.IsNullOrWhiteSpace(this.configuration.UrlReservations.User))
-            {
-                return this.configuration.UrlReservations.User;
-            }
-
-            return WindowsIdentity.GetCurrent().Name;
+            return !string.IsNullOrWhiteSpace(this.configuration.UrlReservations.User)
+                ? this.configuration.UrlReservations.User
+                : WindowsIdentity.GetCurrent().Name;
         }
 
         /// <summary>
@@ -214,9 +219,10 @@
         /// </summary>
         public void Stop()
         {
-            if (this.listener.IsListening)
+            if (this.listener != null && this.listener.IsListening)
             {
-                listener.Stop();
+                this.stop = true;
+                this.listener.Stop();
             }
         }
 
@@ -241,13 +247,12 @@
 
             if (baseUri == null)
             {
-                throw new InvalidOperationException(String.Format("Unable to locate base URI for request: {0}",request.Url));
+                throw new InvalidOperationException(string.Format("Unable to locate base URI for request: {0}",request.Url));
             }
 
             var expectedRequestLength =
                 GetExpectedRequestLength(request.Headers.ToDictionary());
 
-            var relativeUrl = baseUri.MakeAppLocalPath(request.Url);
 
             var nancyUrl = new Url
             {
@@ -255,11 +260,11 @@
                 HostName = request.Url.Host,
                 Port = request.Url.IsDefaultPort ? null : (int?)request.Url.Port,
                 BasePath = baseUri.AbsolutePath.TrimEnd('/'),
-                Path = HttpUtility.UrlDecode(relativeUrl),
-                Query = request.Url.Query,
+                Path = baseUri.MakeAppLocalPath(request.Url),
+                Query = request.Url.Query
             };
 
-            byte[] certificate = null;
+            X509Certificate2 certificate = null;
 
             if (this.configuration.EnableClientCertificates)
             {
@@ -267,7 +272,7 @@
 
                 if (x509Certificate != null)
                 {
-                    certificate = x509Certificate.RawData;
+                    certificate = x509Certificate;
                 }
             }
 
@@ -331,7 +336,7 @@
 
             response.StatusCode = (int)nancyResponse.StatusCode;
 
-            if (configuration.AllowChunkedEncoding)
+            if (this.configuration.AllowChunkedEncoding)
             {
                 OutputWithDefaultTransferEncoding(nancyResponse, response);
             }
@@ -402,39 +407,16 @@
                 contentLength;
         }
 
-        private void GotCallback(IAsyncResult ar)
-        {
-            try
-            {
-                var ctx = this.listener.EndGetContext(ar);
-                this.listener.BeginGetContext(this.GotCallback, null);
-                this.Process(ctx);
-            }
-            catch (Exception e)
-            {
-                this.configuration.UnhandledExceptionCallback.Invoke(e);
-
-                try
-                {
-                    this.listener.BeginGetContext(this.GotCallback, null);
-                }
-                catch
-                {
-                    this.configuration.UnhandledExceptionCallback.Invoke(e);
-                }
-            }
-        }
-
-        private void Process(HttpListenerContext ctx)
+        private async Task Process(HttpListenerContext ctx)
         {
             try
             {
                 var nancyRequest = this.ConvertRequestToNancyRequest(ctx.Request);
-                using (var nancyContext = this.engine.HandleRequest(nancyRequest))
+                using (var nancyContext = await this.engine.HandleRequest(nancyRequest).ConfigureAwait(false))
                 {
                     try
                     {
-                        ConvertNancyResponseToResponse(nancyContext.Response, ctx.Response);
+                        this.ConvertNancyResponseToResponse(nancyContext.Response, ctx.Response);
                     }
                     catch (Exception e)
                     {
